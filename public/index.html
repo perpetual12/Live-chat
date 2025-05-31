@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+        }
+        .chat-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .chat-header {
+            background: #1976d2;
+            color: white;
+            padding: 15px;
+            text-align: center;
+        }
+        .messages-container {
+            height: 400px;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 10px 15px;
+            border-radius: 15px;
+            max-width: 70%;
+            word-wrap: break-word;
+        }
+        .user-message {
+            background: #e3f2fd;
+            align-self: flex-end;
+        }
+        .admin-message {
+            background: #f5f5f5;
+            align-self: flex-start;
+        }
+        .chat-input {
+            display: flex;
+            padding: 20px;
+            border-top: 1px solid #eee;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 20px;
+            margin-right: 10px;
+        }
+        .chat-input button {
+            padding: 10px 20px;
+            background: #1976d2;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+        }
+        .chat-input button:hover {
+            background: #1565c0;
+        }
+        .timestamp {
+            font-size: 0.7em;
+            color: #666;
+            margin-top: 5px;
+        }
+        /* Add read status styles */
+        .message .read-status {
+            font-size: 0.7em;
+            color: #888;
+            margin-top: 2px;
+        }
+        .message.unread {
+            border-right: 3px solid #2196f3;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h2>Live Chat Support</h2>
+        </div>
+        <div class="messages-container" id="messages"></div>
+        <div class="chat-input">
+            <input type="text" id="messageInput" placeholder="Type your message...">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script>
+        const socket = io('http://localhost:3010');
+        const userId = localStorage.getItem('chatUserId') || Date.now().toString();
+        localStorage.setItem('chatUserId', userId);
+        let messageHistory = [];
+
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            // Request message history for this user
+            socket.emit('requestUserHistory', userId);
+        });
+
+        socket.on('messageHistory', (messages) => {
+            console.log('Received message history:', messages);
+            messageHistory = messages;
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = '';
+            messages.forEach(message => {
+                appendMessage(
+                    message.content || message.text,
+                    message.is_admin,
+                    message.is_auto_response,
+                    new Date(message.created_at),
+                    message.read_at
+                );
+            });
+            // Mark admin messages as read
+            socket.emit('markMessagesRead', { userId, isAdmin: false });
+            // Scroll to bottom after loading history
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        });
+
+        socket.on('message', (message) => {
+            if (message.user_id === userId) {
+                messageHistory.push(message);
+                appendMessage(
+                    message.content || message.text,
+                    message.is_admin,
+                    message.is_auto_response,
+                    new Date(message.created_at),
+                    message.read_at
+                );
+                // If it's an admin message, mark it as read immediately
+                if (message.is_admin) {
+                    socket.emit('markMessagesRead', { userId, isAdmin: false });
+                }
+            }
+        });
+
+        socket.on('messagesUpdated', ({ userId: updatedUserId, messages }) => {
+            if (updatedUserId === userId) {
+                messageHistory = messages;
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.innerHTML = '';
+                messages.forEach(message => {
+                    appendMessage(
+                        message.content || message.text,
+                        message.is_admin,
+                        message.is_auto_response,
+                        new Date(message.created_at),
+                        message.read_at
+                    );
+                });
+            }
+        });
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (message) {
+                socket.emit('userMessage', {
+                    text: message,
+                    userId: userId
+                });
+                input.value = '';
+            }
+        }
+
+        function appendMessage(text, isAdmin, isAutoResponse, timestamp = new Date(), readAt = null) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isAdmin ? 'admin-message' : 'user-message'}`;
+            
+            if (!readAt && isAdmin) {
+                messageDiv.classList.add('unread');
+            }
+
+            if (isAutoResponse) {
+                messageDiv.style.fontStyle = 'italic';
+                messageDiv.style.borderLeft = '3px solid #ff9800';
+                messageDiv.style.backgroundColor = '#fff3e0';
+            }
+            
+            messageDiv.innerHTML = `
+                <div>${text}</div>
+                <div class="timestamp">${isAdmin ? 'Support' : 'You'} • ${timestamp.toLocaleTimeString()}</div>
+                ${!isAdmin ? `<div class="read-status">${readAt ? 'Seen ' + new Date(readAt).toLocaleTimeString() : 'Delivered'}</div>` : ''}
+            `;
+            
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Handle enter key
+        document.getElementById('messageInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Add visibility change handler to mark messages as read when user views them
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                socket.emit('markMessagesRead', { userId, isAdmin: false });
+            }
+        });
+
+        // Add reconnection handling
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+        });
+
+        socket.on('reconnect', () => {
+            console.log('Reconnected to server');
+            // Re-request message history after reconnection
+            socket.emit('requestUserHistory', userId);
+        });
+    </script>
+</body>
+</html> 
