@@ -37,3 +37,17 @@ CREATE INDEX "IDX_session_expire" ON "session" ("expire");
 
 -- Create index on user_id for faster message retrieval
 CREATE INDEX "IDX_messages_user_id" ON "messages" ("user_id"); 
+
+
+
+
+
+
+
+
+
+
+
+
+
+                

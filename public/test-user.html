@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test User Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .chat-container {
+            border: 1px solid #ccc;
+            height: 400px;
+            overflow-y: auto;
+            padding: 10px;
+            margin-bottom: 10px;
+            background-color: #f9f9f9;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 8px;
+            border-radius: 5px;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            text-align: right;
+        }
+        .admin-message {
+            background-color: #f3e5f5;
+            text-align: left;
+        }
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test User Chat</h1>
+    <div id="status" class="status disconnected">Disconnected</div>
+    <div id="userId">User ID: <span id="userIdValue">Generating...</span></div>
+    
+    <div id="chatContainer" class="chat-container">
+        <!-- Messages will appear here -->
+    </div>
+    
+    <div class="input-container">
+        <input type="text" id="messageInput" placeholder="Type your message..." onkeypress="handleKeyPress(event)">
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script>
+        let socket;
+        let userId;
+        let isConnected = false;
+
+        // Generate a random user ID
+        function generateUserId() {
+            return 'user_' + Math.random().toString(36).substr(2, 9);
+        }
+
+        // Initialize the chat
+        function initChat() {
+            userId = generateUserId();
+            document.getElementById('userIdValue').textContent = userId;
+            
+            // Connect to socket
+            socket = io('http://localhost:3010');
+            
+            socket.on('connect', () => {
+                console.log('Connected to server');
+                isConnected = true;
+                updateStatus('Connected', 'connected');
+                
+                // Request user history
+                socket.emit('requestUserHistory', userId);
+            });
+            
+            socket.on('disconnect', () => {
+                console.log('Disconnected from server');
+                isConnected = false;
+                updateStatus('Disconnected', 'disconnected');
+            });
+            
+            socket.on('message', (message) => {
+                console.log('Received message:', message);
+                if (message.user_id === userId) {
+                    displayMessage(message);
+                }
+            });
+            
+            socket.on('messageHistory', (messages) => {
+                console.log('Received message history:', messages);
+                const chatContainer = document.getElementById('chatContainer');
+                chatContainer.innerHTML = '';
+                messages.forEach(message => {
+                    displayMessage(message);
+                });
+            });
+        }
+
+        function updateStatus(text, className) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = text;
+            statusElement.className = 'status ' + className;
+        }
+
+        function displayMessage(message) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + (message.is_admin ? 'admin-message' : 'user-message');
+            
+            const time = new Date(message.created_at).toLocaleTimeString();
+            const sender = message.is_admin ? 'Admin' : 'You';
+            
+            messageDiv.innerHTML = `
+                <strong>${sender}:</strong> ${message.content || message.text}
+                <br><small>${time}</small>
+            `;
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (message && isConnected) {
+                socket.emit('userMessage', {
+                    text: message,
+                    userId: userId
+                });
+                input.value = '';
+            }
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        // Initialize when page loads
+        window.onload = initChat;
+    </script>
+</body>
+</html>

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .log {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <h1>Socket.IO Connection Test</h1>
+    
+    <div id="status" class="status disconnected">Disconnected</div>
+    
+    <div>
+        <button onclick="connectSocket()" id="connectBtn">Connect</button>
+        <button onclick="disconnectSocket()" id="disconnectBtn" disabled>Disconnect</button>
+        <button onclick="testAdminConnection()" id="adminBtn" disabled>Test Admin Connection</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+    
+    <h3>Connection Log:</h3>
+    <div id="log" class="log"></div>
+
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script>
+        let socket = null;
+        let isConnected = false;
+
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+
+        function updateStatus(connected) {
+            const statusDiv = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            const adminBtn = document.getElementById('adminBtn');
+            
+            isConnected = connected;
+            
+            if (connected) {
+                statusDiv.textContent = 'Connected';
+                statusDiv.className = 'status connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                adminBtn.disabled = false;
+            } else {
+                statusDiv.textContent = 'Disconnected';
+                statusDiv.className = 'status disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                adminBtn.disabled = true;
+            }
+        }
+
+        function connectSocket() {
+            if (socket) {
+                log('Socket already exists, disconnecting first...');
+                socket.disconnect();
+            }
+            
+            log('Attempting to connect to http://localhost:3010...');
+            socket = io('http://localhost:3010');
+            
+            socket.on('connect', () => {
+                log('✅ Connected successfully! Socket ID: ' + socket.id);
+                updateStatus(true);
+            });
+            
+            socket.on('disconnect', (reason) => {
+                log('❌ Disconnected. Reason: ' + reason);
+                updateStatus(false);
+            });
+            
+            socket.on('connect_error', (error) => {
+                log('❌ Connection error: ' + error.message);
+                updateStatus(false);
+            });
+            
+            socket.on('activeUsers', (users) => {
+                log('📋 Received active users: ' + JSON.stringify(users));
+            });
+            
+            socket.on('message', (message) => {
+                log('💬 Received message: ' + JSON.stringify(message));
+            });
+            
+            // Set a timeout to check connection
+            setTimeout(() => {
+                if (!isConnected) {
+                    log('⚠️ Connection timeout - still not connected after 5 seconds');
+                }
+            }, 5000);
+        }
+
+        function disconnectSocket() {
+            if (socket) {
+                log('Disconnecting socket...');
+                socket.disconnect();
+                socket = null;
+            }
+        }
+
+        function testAdminConnection() {
+            if (!socket || !isConnected) {
+                log('❌ Not connected to server');
+                return;
+            }
+            
+            log('🔧 Testing admin connection...');
+            socket.emit('adminConnected');
+            log('📤 Sent adminConnected event');
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        // Auto-connect on page load
+        window.onload = () => {
+            log('Page loaded, ready to test connection');
+        };
+    </script>
+</body>
+</html>

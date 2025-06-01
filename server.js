@@ -10,6 +10,10 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 const PostgresqlStore = pgSession(session);
 const { Client } = pg;
@@ -18,25 +22,35 @@ const app = express();
 const server = createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
+        origin: process.env.SOCKET_CORS_ORIGIN || 'http://localhost:3000',
+        methods: ["GET", "POST"],
+        credentials: true
     }
 });
 
 // Database configuration
 const client = new Client({
-    user: 'postgres',
-    host: 'localhost',
-    database: 'live_chat_db',
-    password: 'Perpetual12',
-    port: 5000,
+    user: process.env.DB_USER || 'postgres',
+    host: process.env.DB_HOST || 'localhost',
+    database: process.env.DB_NAME || 'live_chat_db',
+    password: process.env.DB_PASSWORD,
+    port: parseInt(process.env.DB_PORT) || 5432,
+    // Connection pool settings
+    max: parseInt(process.env.DB_POOL_MAX) || 10,
+    min: parseInt(process.env.DB_POOL_MIN) || 2,
+    idleTimeoutMillis: parseInt(process.env.DB_POOL_IDLE_TIMEOUT) || 30000,
 });
 
 // Connect to the database
 await client.connect();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -47,11 +61,11 @@ app.use(session({
         tableName: 'session',
         createTableIfMissing: true
     }),
-    secret: 'your_session_secret',
+    secret: process.env.SESSION_SECRET || 'fallback_session_secret_change_in_production',
     resave: false,
     saveUninitialized: false,
-    cookie: { 
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    cookie: {
+        maxAge: parseInt(process.env.SESSION_MAX_AGE) || 30 * 24 * 60 * 60 * 1000, // 30 days default
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict'
@@ -160,7 +174,25 @@ io.on('connection', (socket) => {
     socket.on('adminConnected', async () => {
         console.log('Admin connected, sending active users');
         const activeUsers = await getActiveUsers();
+
+        // Calculate unread counts for each user
+        const unreadCounts = {};
+        for (const userId of activeUsers) {
+            try {
+                const result = await client.query(
+                    'SELECT COUNT(*) as count FROM messages WHERE user_id = $1 AND is_admin = false AND read_at IS NULL',
+                    [userId]
+                );
+                unreadCounts[userId] = parseInt(result.rows[0].count) || 0;
+            } catch (err) {
+                console.error('Error calculating unread count for user', userId, err);
+                unreadCounts[userId] = 0;
+            }
+        }
+
+        console.log('Sending active users and unread counts:', { activeUsers, unreadCounts });
         socket.emit('activeUsers', activeUsers);
+        socket.emit('unreadCounts', unreadCounts);
     });
 
     // Handle marking messages as read
@@ -170,6 +202,11 @@ io.on('connection', (socket) => {
         if (updatedMessages) {
             // Notify all clients about read status update
             io.emit('messagesUpdated', { userId, messages: updatedMessages });
+
+            // If admin is marking messages as read, update unread count
+            if (isAdmin) {
+                io.emit('unreadCountUpdated', { userId, count: 0 });
+            }
         }
     });
 
@@ -185,10 +222,11 @@ io.on('connection', (socket) => {
 
             // If this is a new user, send the welcome message
             if (userMessageCount.rows[0].count === '0') {
+                const welcomeText = process.env.WELCOME_MESSAGE || "Welcome to our chat support! How can we help you today?";
                 const welcomeResult = await client.query(
                     'INSERT INTO messages (content, user_id, is_admin, is_auto_response) VALUES ($1, $2, $3, $4) RETURNING *',
                     [
-                        "Welcome to our chat support! How can we help you today?",
+                        welcomeText,
                         userId,
                         true,
                         true
@@ -227,6 +265,18 @@ io.on('connection', (socket) => {
                 text: newMessage.content
             });
 
+            // Update unread count for this user (increment by 1)
+            try {
+                const unreadResult = await client.query(
+                    'SELECT COUNT(*) as count FROM messages WHERE user_id = $1 AND is_admin = false AND read_at IS NULL',
+                    [message.userId]
+                );
+                const unreadCount = parseInt(unreadResult.rows[0].count) || 0;
+                io.emit('unreadCountUpdated', { userId: message.userId, count: unreadCount });
+            } catch (err) {
+                console.error('Error updating unread count:', err);
+            }
+
             // Check if this is the user's first non-system message
             const userMessageCount = await client.query(
                 'SELECT COUNT(*) FROM messages WHERE user_id = $1 AND NOT is_auto_response',
@@ -237,11 +287,13 @@ io.on('connection', (socket) => {
             if (userMessageCount.rows[0].count === '1' && !userFirstMessages.has(message.userId)) {
                 userFirstMessages.add(message.userId);
                 console.log('Sending auto-response to user:', message.userId);
+                const autoResponseDelay = parseInt(process.env.AUTO_RESPONSE_DELAY) || 1000;
                 setTimeout(async () => {
+                    const autoResponseText = process.env.AUTO_RESPONSE_MESSAGE || "Thank you for reaching out! An agent will join you shortly. Please wait a moment.";
                     const autoResult = await client.query(
                         'INSERT INTO messages (content, user_id, is_admin, is_auto_response) VALUES ($1, $2, $3, $4) RETURNING *',
                         [
-                            "Thank you for reaching out! An agent will join you shortly. Please wait a moment.",
+                            autoResponseText,
                             message.userId,
                             true,
                             true
@@ -252,7 +304,7 @@ io.on('connection', (socket) => {
                         ...autoResponse,
                         text: autoResponse.content
                     });
-                }, 1000);
+                }, autoResponseDelay);
             }
         } catch (err) {
             console.error('Error storing message:', err);
@@ -275,6 +327,15 @@ io.on('connection', (socket) => {
             } catch (err) {
                 console.error('Error storing admin message:', err);
             }
+        }
+    });
+    
+    // Handle admin typing indicator
+    socket.on('adminTyping', (data) => {
+        console.log('Admin typing:', data);
+        if (data.userId) {
+            // Broadcast typing indicator to specific user
+            io.emit('adminTyping', { userId: data.userId });
         }
     });
 
@@ -300,7 +361,8 @@ app.post('/admin/signup', async (req, res) => {
         }
 
         // Hash password and create admin
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const saltRounds = parseInt(process.env.BCRYPT_ROUNDS) || 12;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
         const result = await client.query(
             'INSERT INTO admins (username, password) VALUES ($1, $2) RETURNING id, username, created_at',
             [username, hashedPassword]
@@ -377,19 +439,33 @@ app.post('/admin/login', (req, res, next) => {
                 // Get active users and their messages
                 const activeUsers = await getActiveUsers();
                 const messagesByUser = {};
-                
+                const unreadCounts = {};
+
                 for (const userId of activeUsers) {
                     messagesByUser[userId] = await getUserMessages(userId);
+
+                    // Calculate unread count for this user
+                    try {
+                        const result = await client.query(
+                            'SELECT COUNT(*) as count FROM messages WHERE user_id = $1 AND is_admin = false AND read_at IS NULL',
+                            [userId]
+                        );
+                        unreadCounts[userId] = parseInt(result.rows[0].count) || 0;
+                    } catch (err) {
+                        console.error('Error calculating unread count for user', userId, err);
+                        unreadCounts[userId] = 0;
+                    }
                 }
 
-                return res.json({ 
+                return res.json({
                     message: 'Login successful',
                     user: {
                         id: user.id,
                         username: user.username
                     },
                     activeUsers,
-                    messagesByUser
+                    messagesByUser,
+                    unreadCounts
                 });
             } catch (dbErr) {
                 console.error('Error fetching messages:', dbErr);
@@ -408,12 +484,25 @@ app.get('/admin/dashboard', async (req, res) => {
     try {
         const activeUsers = await getActiveUsers();
         const messagesByUser = {};
-        
+        const unreadCounts = {};
+
         for (const userId of activeUsers) {
             messagesByUser[userId] = await getUserMessages(userId);
+
+            // Calculate unread count for this user
+            try {
+                const result = await client.query(
+                    'SELECT COUNT(*) as count FROM messages WHERE user_id = $1 AND is_admin = false AND read_at IS NULL',
+                    [userId]
+                );
+                unreadCounts[userId] = parseInt(result.rows[0].count) || 0;
+            } catch (err) {
+                console.error('Error calculating unread count for user', userId, err);
+                unreadCounts[userId] = 0;
+            }
         }
 
-        res.json({ activeUsers, messagesByUser });
+        res.json({ activeUsers, messagesByUser, unreadCounts });
     } catch (err) {
         console.error('Error fetching dashboard data:', err);
         res.status(500).json({ message: 'Error fetching dashboard data' });
@@ -445,7 +534,9 @@ process.on('SIGINT', async () => {
 });
 
 // Start server
-const PORT = process.env.PORT || 3010;
-server.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-}); 
+const PORT = parseInt(process.env.PORT) || 3010;
+const HOST = process.env.HOST || 'localhost';
+server.listen(PORT, HOST, () => {
+    console.log(`Server is running on ${HOST}:${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+});
